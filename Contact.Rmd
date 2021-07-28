@@ -1,0 +1,14 @@
+---
+title: "Contact"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+You can contact me directly if you have any questions about the article or the code at the email address:
+<br />
+<baptiste.criniere@icm-institute.org>
+<br />
+<baptiste.criniere.boizet@gmail.com> 

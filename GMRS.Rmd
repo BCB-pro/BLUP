@@ -1,0 +1,461 @@
+---
+title: "Grey Matter Risk Score (GMRS)"
+author: "Baptiste CRINIERE-BOIZET"
+date: "22/07/2021"
+output: html_document
+---
+
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This code concerns the construction of grey matter risk scores as well as their evaluation.
+We built our model from a training sample composed of an MRI image of the UK biobank, then we tested our model in a test sample of the UK biobank independent of the training one as well as in another base ADNI data.
+# Library
+```{r eval=FALSE}
+library(tidyverse)
+library(LDheatmap)
+library(rmarkdown)    
+library(epuRate)      
+library(vroom)        
+library(rrBLUP)
+library(stats)
+library(matlib)
+library(pROC)
+library(DescTools)
+library(lmtest)
+library(FSA)
+library(base)
+```
+
+# Phenotype & Covariates
+## Phenotype
+```{r eval=FALSE}
+data <- read.table("ukb42624_UKbiobank_BCBinternship_24082020.tab", sep ="\t", header = T)
+
+# We only select individuals who have had a MRI
+data <- data[!is.na(data$f.54.2.0),]
+# make sure the date is indeed a date
+data$f.53.0.0 <- as.Date(data$f.53.0.0)
+
+
+# Extract the year and convert to numeric format
+data$year <- as.numeric(format(data$f.53.0.0, "%Y"))
+# Create an age feature
+data$age <- data$year - data$f.34.0.0
+
+# We rename the sex feature :
+data <- data %>% rename(Sex = f.31.0.0)
+
+# We create the Alzheimer status of the father and the mother
+# alz_f : AD father status & alz_M : AD mother status
+data$alz_F <- ifelse(data$f.20107.2.0 == 10 | data$f.20107.2.1 == 10 |data$f.20107.2.2 == 10 |data$f.20107.2.3 == 10 |data$f.20107.2.4 == 10 |data$f.20107.2.5 == 10 |data$f.20107.2.6 == 10 |
+data$f.20107.2.7 == 10 |data$f.20107.2.8 == 10 |data$f.20107.2.9 == 10, 1, 0)
+data$alz_M <- ifelse(data$f.20110.2.0 == 10 | data$f.20110.2.1 == 10  | data$f.20110.2.2 == 10 | data$f.20110.2.3 == 10 |data$f.20110.2.4 == 10 |data$f.20110.2.5 == 10 |data$f.20110.2.6 == 10 |
+data$f.20110.2.7 == 10 |data$f.20110.2.8 == 10 |data$f.20110.2.9 == 10 |data$f.20110.2.10 == 10, 1, 0)
+data$alz_F <- ifelse(is.na(data$alz_F), 0, 1)
+data$alz_M <- ifelse(is.na(data$alz_M), 0, 1)
+
+# On compte le nombre de valeur manquante :
+sum(is.na(data$f.1845.0.0))
+sum(is.na(data$f.2946.0.0))
+data[data$alz_F==1 & data$alz_M==1,]
+# Prévalence de la maladie :
+table(data$alz_F)
+table(data$alz_M)
+
+#We deal with missig value
+#Mother age of death at imaging
+data$f.3526.0.0 <- ifelse(is.na(data$f.3526.0.0), 0, data$f.3526.0.0)
+data$f.3526.1.0 <- ifelse(is.na(data$f.3526.1.0), 0, data$f.3526.1.0)
+data$f.3526.2.0 <- ifelse(is.na(data$f.3526.2.0), 0, data$f.3526.2.0)
+#Mother age at imaging
+data$f.1845.0.0 <- ifelse(is.na(data$f.1845.0.0), 0, data$f.1845.0.0)
+data$f.1845.1.0 <- ifelse(is.na(data$f.1845.1.0), 0, data$f.1845.1.0)
+data$f.1845.2.0 <- ifelse(is.na(data$f.1845.2.0), 0, data$f.1845.2.0)
+
+absmax <- function(x, na.rm = FALSE) {max(abs(x), na.rm = na.rm)}
+# On fait une boucle
+for (i in 1:nrow(data)){
+  data$age_M_A[i] <- ifelse(data$f.1845.0.0[i]<=0, absmax(c(data$f.1845.0.0[i], data$f.1845.1.0[i], data$f.1845.2.0[i])), data$f.1845.0.0[i])
+}
+for (i in 1:nrow(data)){
+  data$age_M_D[i] <- ifelse(data$f.3526.0.0[i]<=0, absmax(c(data$f.3526.0.0[i], data$f.3526.1.0[i], data$f.3526.2.0[i])), data$f.3526.0.0[i])
+}
+for (i in 1:nrow(data)){
+  data$age_Mother[i] <- data$age_M_A[i]
+  if (data$age_M_A[i] <= 3){
+    data$age_Mother[i] <- data$age_M_D[i]
+  }
+}
+
+
+#We deal with missing value
+#Father age of death at imaging
+data$f.2946.0.0 <- ifelse(is.na(data$f.2946.0.0), 0, data$f.2946.0.0)
+data$f.2946.1.0 <- ifelse(is.na(data$f.2946.1.0), 0, data$f.2946.1.0)
+data$f.2946.2.0 <- ifelse(is.na(data$f.2946.2.0), 0, data$f.2946.2.0)
+#Father age at imaging
+data$f.1807.0.0 <- ifelse(is.na(data$f.1807.0.0), 0, data$f.1807.0.0)
+data$f.1807.1.0 <- ifelse(is.na(data$f.1807.1.0), 0, data$f.1807.1.0)
+data$f.1807.2.0 <- ifelse(is.na(data$f.1807.2.0), 0, data$f.1807.2.0)
+
+#We do a loop
+for (i in 1:nrow(data)){
+  data$age_F_A[i] <- ifelse(data$f.1807.0.0[i]<=0, absmax(c(data$f.1807.0.0[i], data$f.1807.1.0[i], data$f.1807.2.0[i])), data$f.1807.0.0[i])
+}
+for (i in 1:nrow(data)){
+  data$age_F_D[i] <- ifelse(data$f.2946.0.0[i]<=0, absmax(c(data$f.2946.0.0[i], data$f.2946.1.0[i], data$f.2946.2.0[i])), data$f.2946.0.0[i])
+}
+for (i in 1:nrow(data)){
+  data$age_Father[i] <- data$age_F_A[i]
+  if (data$age_F_A[i] <= 3){
+    data$age_Father[i] <- data$age_F_D[i]
+  }
+}
+
+#We create the phenotype father and mother
+phenotype <- data %>% select(f.eid, alz_F, age_Father, alz_M, age_Mother)
+phenotype_father <- phenotype %>% select(f.eid, alz_F, age_Father)
+phenotype_father <- phenotype_father[phenotype_father$age_Father>=65,]
+phenotype_father <- phenotype_father %>% select(f.eid, alz_F)
+phenotype_mother <- phenotype %>% select(f.eid, alz_M, age_Mother)
+phenotype_mother <- phenotype_mother[phenotype_mother$age_Mother>=65,]
+phenotype_mother <- phenotype_mother %>% select(f.eid, alz_M)
+phenotype_father$id <- phenotype_father$f.eid
+phenotype_father <- phenotype_father %>% select(id, f.eid, alz_F) 
+phenotype_mother$id <- phenotype_mother$f.eid
+phenotype_mother <- phenotype_mother %>% select(id, f.eid, alz_M) 
+write.table(phenotype_father, "phenotype_father.txt", col.names = F, row.names = F, quote=F)
+write.table(phenotype_mother, "phenotype_mother.txt", col.names = F, row.names = F, quote=F)
+#We create the proxy phenotype
+proxy_phenotype <- phenotype
+for (i in 1:nrow(proxy_phenotype)){
+proxy_phenotype$proxy_Father[i] <- ifelse(proxy_phenotype$alz_F[i]==1, proxy_phenotype$alz_F[i], min(abs(max(1-proxy_phenotype$age_Father[i]/100, 0)), 0.32))
+proxy_phenotype$proxy_Mother[i] <- ifelse(proxy_phenotype$alz_M[i]==1, proxy_phenotype$alz_M[i], min(abs(max(1-proxy_phenotype$age_Mother[i]/100, 0)), 0.32))}
+proxy_phenotype$id <- proxy_phenotype$f.eid
+proxy_phenotype$proxy <- proxy_phenotype$proxy_Mother + proxy_phenotype$proxy_Father
+proxy_phenotype <- proxy_phenotype %>% select(f.eid, proxy)
+write.table(proxy_phenotype, "phenotype_proxy.txt", col.names = F, row.names = F, quote=F)
+```
+## Covariates
+```{r eval=FALSE}
+# Covariables : age, sex, Volumetric scaling from T1 head image to standard space :
+covariates <- data %>% select(f.eid, age, f.25000.2.0)
+covariates$id <- covariates$f.eid
+covariates <- covariates %>% select(id, f.eid, age, f.25000.2.0)
+write.table(covariates, "covariates.txt", col.names = F, row.names = F, quote=F)
+```
+
+# Data Management
+## Variance filter
+We select the voxels which have a variance greater than a certain threshold, here we have chosen a threshold of 0.2
+```{r eval=FALSE}
+osca --befile data --sd-min 0.2 --make-bod --out filtered_data
+```
+## Recover the name of voxels
+We recover the names of the Voxels that we selected with the exclusion criterion.
+```{r eval=FALSE}
+fls <- read.table("filtered_data.opi", stringsAsFactors = F)
+fls <- fls %>% select(V2)
+write.table(fls, "Voxel_selection.tsv", col.names = F, row.names = F, quote= F)
+```
+# Calculation of the ORM
+## By making a loop
+### ORM division
+We divide the calculation of the ORM into 10, because it is very heavy to do in one.
+```{r eval=FALSE}
+fls <- read.table("filtered_data.opi", stringsAsFactors = F)
+fls <- fls %>% select(V2)
+d <- split(fls, (seq(nrow(fls))-1) %/% 15000)
+for (i in 1:length(d)) {
+  write.table(as.data.frame(d[i]), paste0("Vox_", i), col.names = F, row.names = F, quote=F)
+}
+```
+### ORM Loop
+We make a loop to calculate the ORM
+```{bash eval=FALSE}
+for nb in {1..10}; do
+osca --befile filtered_data --extract-probe  $wd/Batch/Voxels/Vox_"${nb}" --make-bod --out data_"${nb}"
+done
+for nb in {1..10}; do
+osca --befile filtered_data --extract-probe Vox_"${nb}" --make-orm --out ORM/ORM_"${nb}"
+done 
+```
+### We delete the .id extension
+```{r eval=FALSE}
+fls <- read.table("ORMs.tsv", stringsAsFactors = F)
+fls$V1 <- substr(fls$V1, 1, 83)
+write.table(fls, "ORMs.tsv", col.names = F, row.names = F, quote = F)
+```
+### Merge ORM
+```{bash eval=FALSE}
+ls -d ORM/*.id > ORM/ORMs.tsv
+osca --multi-orm ORM/ORMs.tsv --make-orm --out ORM
+```
+## ORM calculation directly
+```{bash eval=FALSE}
+osca --befile filtered_data --make-orm --out ORM
+```
+
+# BLUP with AD status of the mother as phenotype
+## BLUP 1
+```{bash eval=FALSE}
+osca --reml --orm ORM --qcovar covariates.txt  --pheno phenotyp_mother.txt --reml-pred-rand --out blup_mother
+```
+## BLUP 2
+```{bash eval=FALSE}
+osca --befile filtered_data covariates.txt --blup-probe blup_mother.indi.blp --out myblp_mother
+```
+## BLUP 3 : SCORE calculation
+```{bash eval=FALSE}
+osca --befile reprod1 --score myblp_mother.probe.blp --out SCORE_mother_reprod
+osca --befile ADNI --score myblp_mother.probe.blp --out SCORE_mother_ADNI 
+```
+# BLUP with AD status of the father as phenotype
+## BLUP 1
+```{bash eval=FALSE}
+osca --reml --orm ORM --qcovar covariates.txt  --pheno phenotype_father.txt --reml-pred-rand --out blup_father
+```
+## BLUP 2
+```{bash eval=FALSE}
+osca --befile filtered_data covariates.txt --blup-probe blup_father.indi.blp --out myblp_father
+```
+## BLUP 3 : SCORE calculation
+```{bash eval=FALSE}
+osca --befile reprod1 --score myblp_father.probe.blp --out SCORE_father_reprod
+osca --befile ADNI --score myblp_father.probe.blp --out SCORE_father_ADNI 
+```
+# BLUP with proxy phenotype as phenotype
+## BLUP 1
+```{bash eval=FALSE}
+osca --reml --orm ORM --qcovar covariates.txt  --pheno phenotype_proxy.txt --reml-pred-rand --out blup_proxy
+```
+## BLUP 2
+```{bash eval=FALSE}
+osca --befile filtered_data covariates.txt --blup-probe blup_proxy.indi.blp --out myblp_proxy
+```
+## BLUP 3 : SCORE calculation
+```{bash eval=FALSE}
+osca --befile reprod --score myblp_proxy.probe.blp --out SCORE_proxy_reprod
+osca --befile ADNI --score myblp_proxy.probe.blp --out SCORE_proxy_ADNI 
+```
+
+# Results
+## UKbiobank reproductibility
+### Proxy phenotype
+```{r eval=FALSE}
+# Scores
+ukb <- read.table("SCORE_proxy_reprod.profile", sep ="\t", header = T)
+ukb <- ukb %>% select(IID, SCORE)
+# Phenotype
+proxy_phenotype <- read.table("pheotype_proxy.txt", sep =" ", header = F)
+proxy_phenotype <- proxy_phenotype %>% select(V1, V3)
+proxy_phenotype <- proxy_phenotype %>% rename(Proxy=V3)
+prediction <- merge(ukb, proxy_phenotype, by.x = "IID", by.y = "V1")
+# Covariates
+covariates <- read.table("covariates.txt", sep =" ", header = F)
+covariates <- covariates %>% select(V1, V3, V4, V5)
+covariates <- covariates %>% rename(Age=V3,Sex=V4,Volume=V5)
+prediction <- merge(prediction, covariates, by.x = "IID", by.y = "V1" )
+# Results
+a <- lm(formula = Proxy ~ Age + Sex + Volume, data = prediction)
+a1 <- summary(a)$r.squared
+b <- lm(formula = Proxy ~ SCORE + Age + Sex + Volume, data = prediction)
+b1 <- summary(b)$r.squared
+b1-a1
+summary(b)
+```
+## Mother phenotype
+```{r eval=FALSE}
+# Scores
+ukb <- read.table("SCORE_mother_reprod.profile", sep ="\t", header = T)
+ukb <- ukb %>% select(IID, SCORE)
+# Phenotype
+mother_phenotype <- read.table("phenotype_mother.txt", sep =" ", header = F)
+mother_phenotype <- mother_phenotype %>% select(V1, V3)
+mother_phenotype <- mother_phenotype %>% rename(Proxy=V3)
+prediction <- merge(ukb, mother_phenotype, by.x = "IID", by.y = "V1")
+# Covariates
+covariates <- read.table("covariates.txt", sep =" ", header = F)
+covariates <- covariates %>% select(V1, V3, V4, V5)
+covariates <- covariates %>% rename(Age=V3,Sex=V4,Volume=V5)
+prediction <- merge(prediction, covariates, by.x = "IID", by.y = "V1" )
+# Results
+a <- glm(formula = Proxy ~ Age + Sex + Volume, data = prediction, family = binomial())
+a1 <- PseudoR2(a, which = "Efron")
+b <- glm(formula = Proxy ~ SCORE + Age + Sex + Volume, data = prediction, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+b1-a1
+summary(b)
+```
+
+## Father phenotype
+```{r eval=FALSE}
+# Scores
+ukb <- read.table("SCORE_father_reprod.profile", sep ="\t", header = T)
+ukb <- ukb %>% select(IID, SCORE)
+# Phenotype
+father_phenotype <- read.table("phenotype_father.txt", sep =" ", header = F)
+father_phenotype <- father_phenotype %>% select(V1, V3)
+father_phenotype <- father_phenotype %>% rename(Proxy=V3)
+prediction <- merge(ukb, father_phenotype, by.x = "IID", by.y = "V1")
+# Covariates
+covariates <- read.table("covariates.txt", sep =" ", header = F)
+covariates <- covariates %>% select(V1, V3, V4, V5)
+covariates <- covariates %>% rename(Age=V3,Sex=V4,Volume=V5)
+prediction <- merge(prediction, covariates, by.x = "IID", by.y = "V1" )
+# Results
+a <- glm(formula = Proxy ~ Age + Sex + Volume, data = prediction, family = binomial())
+a1 <- PseudoR2(a, which = "Efron")
+b <- glm(formula = Proxy ~ SCORE + Age + Sex + Volume, data = prediction, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+summary(b)
+b1-a1
+```
+## ADNI results
+### Proxy phenoype
+#### Data management
+```{r eval=FALSE}
+# ADNI phenotypes
+ADNI1 <- vroom(file = 'ADNI1_phenotypes_all_2020Update_conversion.txt')
+ADNI2 <- vroom(file = 'ADNI2_GO_phenotypes_all_2020Update_conversion.txt')
+ADNI1 <- ADNI1 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, ADAS11_bl, ADAS13_bl,MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,conversion4year, conversion5year, conversion10year)
+ADNI2 <- ADNI2 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,
+conversion4year, conversion5year, conversion10year)
+adnibis1 <- vroom(file = 'ADNI1_phenotypes_all.txt')
+adnibis1 <- adnibis1 %>% select(PTID, ICV.y)
+adnibis2 <- vroom(file = 'ADNI2_GO_phenotypes_all.txt')
+adnibis2 <- adnibis2 %>% select(PTID, ICV.y)
+adnibis <- rbind(adnibis1, adnibis2)
+ADNI <- rbind(ADNI1, ADNI2)
+ADNI <- merge(ADNI, adnibis, by.x = "PTID", by.y = "PTID")
+# ADNI scores
+adni <- read.table("SCORE_proxy_ADNI.profile", sep ="\t", header = T)
+adni <- adni %>% select(IID, SCORE)
+ADNI$PTID <- paste0(paste0(substr(ADNI$PTID, 1, 3), substr(ADNI$PTID, 5, 5)), substr(ADNI$PTID, 7, 10))
+ADNI <- merge(ADNI, adni, by.x = "PTID", by.y = "IID")
+```
+#### Results
+```{r eval=FALSE}
+# Phenotype Alzheimer
+# We also can test other phenotype by remplacing Alz_bl by conversion1year, Tau_bl, etc.
+a <- glm(Alz_bl ~ SCORE + AGE + PTGENDER + ICV.y, data = ADNI, family = binomial())
+a1 <- PseudoR2(a, which = "Efron")
+b <- glm(Alz_bl ~ ICV.y + AGE + PTGENDER, data = ADNI, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+b1-a1
+summary(a)
+```
+### Mother phenoype
+#### Data management
+```{r eval=FALSE}
+# ADNI phenotypes
+ADNI1 <- vroom(file = 'ADNI1_phenotypes_all_2020Update_conversion.txt')
+ADNI2 <- vroom(file = 'ADNI2_GO_phenotypes_all_2020Update_conversion.txt')
+ADNI1 <- ADNI1 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, ADAS11_bl, ADAS13_bl,MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,conversion4year, conversion5year, conversion10year)
+ADNI2 <- ADNI2 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,
+conversion4year, conversion5year, conversion10year)
+adnibis1 <- vroom(file = 'ADNI1_phenotypes_all.txt')
+adnibis1 <- adnibis1 %>% select(PTID, ICV.y)
+adnibis2 <- vroom(file = 'ADNI2_GO_phenotypes_all.txt')
+adnibis2 <- adnibis2 %>% select(PTID, ICV.y)
+adnibis <- rbind(adnibis1, adnibis2)
+ADNI <- rbind(ADNI1, ADNI2)
+ADNI <- merge(ADNI, adnibis, by.x = "PTID", by.y = "PTID")
+# ADNI scores
+adni <- read.table("SCORE_mother_ADNI.profile", sep ="\t", header = T)
+adni <- adni %>% select(IID, SCORE)
+ADNI$PTID <- paste0(paste0(substr(ADNI$PTID, 1, 3), substr(ADNI$PTID, 5, 5)), substr(ADNI$PTID, 7, 10))
+ADNI <- merge(ADNI, adni, by.x = "PTID", by.y = "IID")
+```
+#### Results
+```{r eval=FALSE}
+# Phenotype Alzheimer
+# We also can test other phenotype by remplacing Alz_bl by conversion1year, Tau_bl, etc.
+a <- glm(Alz_bl ~ SCORE + AGE + PTGENDER + ICV.y, data = ADNI, family = binomial())
+a1 <- PseudoR2(a, which = "Efron")
+b <- glm(Alz_bl ~ ICV.y + AGE + PTGENDER, data = ADNI, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+b1-a1
+summary(a)
+```
+#### Mother phenotype ADNI
+```{r eval=FALSE}
+# Parent
+A1 <- vroom(file = 'ADNI1_parent.txt')
+A1 <- A1 %>% select(PTID, FHQMOM, FHQDAD, FHQDADAD, FHQMOMAD,AGE, PTGENDER)
+A2 <- vroom(file = 'ADNI2_parent')
+A2 <- A2 %>% select(PTID, FHQMOM, FHQDAD, FHQDADAD, FHQMOMAD,AGE, PTGENDER)
+A <- rbind(A1, A2)
+adni <- read.table("SCORE_mother_ADNI.profile", sep ="\t", header = T)
+adni <- adni %>% select(IID, SCORE)
+A$PTID <- paste0(paste0(substr(A$PTID, 1, 3), substr(A$PTID, 5, 5)), substr(A$PTID, 7, 10))
+A <- merge(A, adni, by.x = "PTID", by.y = "IID")
+A <- merge(A, ADNI, by.x = "PTID", by.y = "PTID")
+A <- A %>% filter(FHQMOMAD == 0 | FHQMOMAD == 1)
+#Resultats
+b <- glm(FHQMOMAD ~ AGE.y + PTGENDER.y + ICV.y, data = A, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+c <- glm(FHQMOMAD ~ SCORE + AGE.y + PTGENDER.y + ICV.y, data = A, family = binomial())
+c1 <- PseudoR2(c, which = "Efron")
+c1-b1
+summary(c)
+```
+### Father phenoype
+#### Data management
+```{r eval=FALSE}
+# ADNI phenotypes
+ADNI1 <- vroom(file = 'ADNI1_phenotypes_all_2020Update_conversion.txt')
+ADNI2 <- vroom(file = 'ADNI2_GO_phenotypes_all_2020Update_conversion.txt')
+ADNI1 <- ADNI1 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, ADAS11_bl, ADAS13_bl,MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,conversion4year, conversion5year, conversion10year)
+ADNI2 <- ADNI2 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,
+conversion4year, conversion5year, conversion10year)
+adnibis1 <- vroom(file = 'ADNI1_phenotypes_all.txt')
+adnibis1 <- adnibis1 %>% select(PTID, ICV.y)
+adnibis2 <- vroom(file = 'ADNI2_GO_phenotypes_all.txt')
+adnibis2 <- adnibis2 %>% select(PTID, ICV.y)
+adnibis <- rbind(adnibis1, adnibis2)
+ADNI <- rbind(ADNI1, ADNI2)
+ADNI <- merge(ADNI, adnibis, by.x = "PTID", by.y = "PTID")
+
+# ADNI scores
+adni <- read.table("SCORE_father_ADNI.profile", sep ="\t", header = T)
+adni <- adni %>% select(IID, SCORE)
+ADNI$PTID <- paste0(paste0(substr(ADNI$PTID, 1, 3), substr(ADNI$PTID, 5, 5)), substr(ADNI$PTID, 7, 10))
+ADNI <- merge(ADNI, adni, by.x = "PTID", by.y = "IID")
+```
+#### Results
+```{r eval=FALSE}
+# Phenotype Alzheimer
+# We also can test other phenotype by remplacing Alz_bl by conversion1year, Tau_bl, etc.
+a <- glm(Alz_bl ~ SCORE + AGE + PTGENDER + ICV.y, data = ADNI, family = binomial())
+a1 <- PseudoR2(a, which = "Efron")
+b <- glm(Alz_bl ~ ICV.y + AGE + PTGENDER, data = ADNI, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+b1-a1
+summary(a)
+```
+### Father phenotype ADNI
+```{r eval=FALSE}
+# Parent
+A1 <- vroom(file = 'ADNI1_parent.txt')
+A1 <- A1 %>% select(PTID, FHQMOM, FHQDAD, FHQDADAD, FHQMOMAD,AGE, PTGENDER)
+A2 <- vroom(file = 'ADNI2_parent')
+A2 <- A2 %>% select(PTID, FHQMOM, FHQDAD, FHQDADAD, FHQMOMAD,AGE, PTGENDER)
+A <- rbind(A1, A2)
+adni <- read.table("SCORE_mother_ADNI.profile", sep ="\t", header = T)
+adni <- adni %>% select(IID, SCORE)
+A$PTID <- paste0(paste0(substr(A$PTID, 1, 3), substr(A$PTID, 5, 5)), substr(A$PTID, 7, 10))
+A <- merge(A, adni, by.x = "PTID", by.y = "IID")
+A <- merge(A, ADNI, by.x = "PTID", by.y = "PTID")
+A <- A %>% filter(FHQDADAD == 0 | FHQDADAD == 1)
+#Results
+b <- glm(FHQDADAD ~ AGE.y + PTGENDER.y + ICV.y, data = A, family = binomial())
+b1 <- PseudoR2(b, which = "Efron")
+c <- glm(FHQDADAD ~ SCORE + AGE.y + PTGENDER.y + ICV.y, data = A, family = binomial())
+c1 <- PseudoR2(c, which = "Efron")
+c1-b1
+summary(c)
+```

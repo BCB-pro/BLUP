@@ -1,0 +1,217 @@
+---
+title: "Polygenic Risk Score (PRS)"
+author: "Baptiste CRINIERE-BOIZET"
+date: "22/07/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This code concerns the construction of polygenic risk scores as well as their evaluation.
+We built our models from two GWASs and their summary statistics, the first from the work of Kunkle and his team, the second from Jansen and his team. Then we tested our model in ADNI database.
+# Library
+```{r eval=FALSE}
+library(tidyverse)
+library(LDheatmap)
+library(rmarkdown)    
+library(epuRate)      
+library(vroom)        
+library(rrBLUP)
+library(stats)
+library(matlib)
+library(pROC)
+library(DescTools)
+library(lmtest)
+library(FSA)
+```
+
+# Data management
+Creation of the cojo files
+## Jansen
+```{r eval=FALSE}
+# Jansen
+Jansen <- vroom("/AD_sumstats_Jansenetal_2019sept.txt")
+Jansen <- Jansen %>% filter(EAF >0.01 & EAF<0.99)
+Jansen <- Jansen %>% select(SNP, A1, A2, EAF, BETA, SE, Pp, Neff)
+write.table(Jansen, "Jansen.ma", col.names = F, row.names = F, quote=F)
+```
+## Kunkle
+```{r eval=FALSE}
+# Kunkle
+Kunkle <- vroom("C:/Users/bapti/OneDrive/Documents/Travail/Stage/Code/Kunkle_p-value.ma")
+Kunkle <- Kunkle %>% select(MarkerName, Effect_allele, Non_Effect_allele, Beta, SE, Pvalue)
+# Neff is missing for the Kunkle as well as the MAF. We get the MAF from the Jansen and we use Neff given in the article
+write.table(Kunkle, "Kunkle.ma", col.names = F, row.names = F, quote=F)
+```
+
+# SBLUP
+SBLUP weights are calculated independently for each chromosome.
+With the exception of chromosome 19 for which only the APOE zone will be used, because the BLUP normality assumption is no longer verified on this chromosome.
+## Jansen
+```{bash eval=FALSE}
+for nb in {1..18}; do
+gcta64 --bfile chr_"${nb}" --cojo-file Jansen.ma --cojo-sblup 1.33e6 --cojo-wind 1000 --thread-num 20 --out BLUP_Jansen_chr_"${nb}"
+done 
+for nb in {20..22}; do
+gcta64 --bfile chr_"${nb}" --cojo-file Kunkle.ma --cojo-sblup 1.33e6 --cojo-wind 1000 --thread-num 20 --out BLUP_Jansen_chr_"${nb}"
+done 
+```
+## Kunkle
+## Jansen
+```{bash eval=FALSE}
+for nb in {1..18}; do
+gcta64 --bfile chr_"${nb}" --cojo-file Kunkle.ma --cojo-sblup 1.33e6 --cojo-wind 1000 --thread-num 20 --out BLUP_Kunkle_chr_"${nb}"
+done 
+for nb in {20..22}; do
+gcta64 --bfile chr_"${nb}" --cojo-file Kunle.ma --cojo-sblup 1.33e6 --cojo-wind 1000 --thread-num 20 --out BLUP_Kunkle_chr_"${nb}"
+done 
+```
+# Blup
+## Jansen
+```{bash eval=FALSE}
+for nb in {1..18}; do
+plink --bfile ADNI_chr_"${nb}" --score BLUP_Jansen_chr_"${nb}".snp.blp 1 2 3 --out SCORE_Jansen_chr_"${nb}" 
+done 
+for nb in {20..22}; do
+plink --bfile ADNI_chr_"${nb}" --score BLUP_Jansen_chr_"${nb}".snp.blp 1 2 3 --out SCORE_Jansen_chr_"${nb}" 
+done 
+```
+## Kunkle
+```{bash eval=FALSE}
+for nb in {1..18}; do
+plink --bfile ADNI_chr_"${nb}" --score BLUP_Kunkle_chr_"${nb}".snp.blp 1 2 3 --out SCORE_Kunkle_chr_"${nb}" 
+done 
+for nb in {20..22}; do
+plink --bfile ADNI_chr_"${nb}" --score BLUP_Kunkle_chr_"${nb}".snp.blp 1 2 3 --out SCORE_Kunkle_chr_"${nb}" 
+done 
+```
+## Sum scores
+We sum the scores of the 22 chromosomes with the exception of 19, in order to obtain a unique Alzheimer's risk score.
+## APOE
+We summarize all the information contained in chromosome 19 by the region of APOE alone.
+### Jansen
+#### Creation of the APOE cojo file
+```{r eval=FALSE}
+APOE <- Jansen[data2$SNP == "rs7412" | data2$SNP == "rs429358",]
+APOE <- APOE %>% select(SNP, A1, BETA)
+write.table(APOE, 'APOE_Jansen.cojo',row.names = F, col.names = F, sep = "\t", quote = F)
+```
+#### APOE score
+```{bash eval=FALSE}
+plink --bfile ADNI_chr19  --score APOE_Jansen.cojo 1 2 3  --out PRS_Jansen_APOE
+```
+### Kunkle
+#### Creation of the APOE cojo file
+```{r eval=FALSE}
+APOE <- Kunkle[data2$SNP == "rs7412" | data2$SNP == "rs429358",]
+APOE <- APOE %>% select(SNP, Effect_allele, Beta)
+write.table(APOE, 'APOE_Kunkle.cojo',row.names = F, col.names = F, sep = "\t", quote = F)
+```
+#### APOE score
+```{bash eval=FALSE}
+plink --bfile ADNI_chr19  --score APOE_Kunkle.cojo 1 2 3  --out PRS_Kunkle_APOE
+```
+
+
+# Results
+## Data bases
+```{r eval=FALSE}
+# Scores files
+SCOREJ <- vroom(file = "PRS_J_final.txt")
+SCOREK <- vroom(file = "PRS_K_final.txt", delim = ' ')
+
+# APOE scores
+## APOE Kunkle
+SCORE_Kunkle_APOE <- read.table("PRS_Kunkle_APOE", header = T)
+SCORE_Kunkle_APOE <- SCORE_Kunkle_APOE %>% select(IID, SCORE)
+SCORE_Kunkle_APOE <- SCORE_Kunkle_APOE %>% rename(APOE = SCORE)
+SCOREK <- merge(SCOREK, SCORE_Kunkle_APOE, by = "IID")
+## APOE Jansen
+SCORE_Jansen_APOE <- read.table("PRS_Jansen_APOE", header = T)
+SCORE_Jansen_APOE <- SCORE_Jansen_APOE %>% select(IID, SCORE)
+SCORE_Jansen_APOE <- SCORE_Jansen_APOE %>% rename(APOE = SCORE)
+SCOREJ <- merge(SCOREJ, SCORE_Jansen_APOE, by = "IID")
+
+# ADNI
+ADNI1 <- vroom(file = 'ADNI1_phenotypes_all_2020Update_conversion.txt')
+ADNI2 <- vroom(file = 'ADNI2_GO_phenotypes_all_2020Update_conversion.txt')
+ADNI1 <- ADNI1 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, ADAS11_bl, ADAS13_bl,MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,conversion4year, conversion5year, conversion10year)
+ADNI2 <- ADNI2 %>% select(PTID, Alz_bl, AGE, PTGENDER, PTEDUCAT, SITE, AlzProg, CDRSB_bl, ADAS11_bl, ADAS13_bl,MMSE_bl, ABETA_bl, TAU_bl, PTAU_bl, AlzMCI_bl, conversion1year, conversion2year, conversion3year,conversion4year, conversion5year, conversion10year)
+ADNI <- rbind(ADNI1, ADNI2)
+
+# Merge
+SCOREJ <- merge(ADNI, SCOREJ, by.x = "PTID", by.y = "IID")
+SCOREK <- merge(ADNI, SCOREK, by.x = "PTID", by.y = "IID")
+```
+## Analyses
+### Jansen SCORE
+```{r eval=FALSE}
+# We can change the variable of interest that we seek to explain, by conversion variables, cognitive test, etc.
+# Logistic regression
+# Null model
+a <- glm(Alz_bl ~ AGE + PTGENDER + SITE, data = SCOREJ, family = binomial())
+# Score of the genome except chromosome 19
+b <- glm(Alz_bl ~ AGE + PTGENDER + SITE + SCORE, data = SCOREJ, family = binomial())
+# Score of APOE
+c <- glm(Alz_bl ~ AGE + PTGENDER + SITE + SCORE_APOE, data = SCOREJ, family = binomial())
+# Score of the genome and apoe
+d <- glm(Alz_bl ~ AGE + PTGENDER + SITE + SCORE + SCORE_APOE, data = SCOREJ, family = binomial())
+summary(a)
+summary(b)
+summary(c)
+summary(d)
+
+# Calculation of the pseudo R squared
+a1 <- PseudoR2(a, which = "all")
+b1 <- PseudoR2(b, which = "all")
+c1 <- PseudoR2(c, which = NULL)
+d1 <- PseudoR2(d, which = NULL)
+
+# Variance explained by scores
+b1-a1
+c1-a1
+d1-a1
+
+# Likelihood ratio test for nested models
+stat <- 2*(logLik(b)-logLik(a))
+1-pchisq(stat,df=length(b$coef)-length(a$coef))
+stat <- 2*(logLik(c)-logLik(a))
+1-pchisq(stat,df=length(b$coef)-length(a$coef))
+stat <- 2*(logLik(d)-logLik(a))
+1-pchisq(stat,df=length(b$coef)-length(a$coef))
+```
+### Kunkle SCORE
+```{r eval=FALSE}
+# Logistic regression
+# Null model
+a <- glm(Alz_bl ~ AGE + PTGENDER + SITE, data = SCOREK, family = binomial())
+# Score of the genome except chromosome 19
+b <- glm(Alz_bl ~ AGE + PTGENDER + SITE + SCORE, data = SCOREK, family = binomial())
+# Score of APOE
+c <- glm(Alz_bl ~ AGE + PTGENDER + SITE + SCORE_APOE, data = SCOREK, family = binomial())
+# Score of the genome and apoe
+d <- glm(Alz_bl ~ AGE + PTGENDER + SITE + SCORE + SCORE_APOE, data = SCOREK, family = binomial())
+summary(a)
+summary(b)
+summary(c)
+summary(d)
+
+# Calculation of the pseudo R squared
+a1 <- PseudoR2(a, which = "all")
+b1 <- PseudoR2(b, which = "all")
+c1 <- PseudoR2(c, which = NULL)
+d1 <- PseudoR2(d, which = NULL)
+
+# Variance explained by scores
+b1-a1
+c1-a1
+d1-a1
+
+# Likelihood ratio test for nested models
+stat <- 2*(logLik(b)-logLik(a))
+1-pchisq(stat,df=length(b$coef)-length(a$coef))
+stat <- 2*(logLik(c)-logLik(a))
+1-pchisq(stat,df=length(b$coef)-length(a$coef))
+stat <- 2*(logLik(d)-logLik(a))
+1-pchisq(stat,df=length(b$coef)-length(a$coef))
+```
