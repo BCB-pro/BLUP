@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 This code concerns the construction of grey matter risk scores as well as their evaluation.
 We built our model from a training sample composed of an MRI image of the UK biobank, then we tested our model in a test sample of the UK biobank independent of the training one as well as in another base ADNI data.
+
 # Library
 ```{r eval=FALSE}
 library(tidyverse)

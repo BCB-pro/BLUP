@@ -9,6 +9,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 This code concerns the construction of polygenic risk scores as well as their evaluation.
 We built our models from two GWASs and their summary statistics, the first from the work of Kunkle and his team, the second from Jansen and his team. Then we tested our model in ADNI database.
+
 # Library
 ```{r eval=FALSE}
 library(tidyverse)
@@ -32,13 +33,13 @@ Creation of the cojo files
 # Jansen
 Jansen <- vroom("/AD_sumstats_Jansenetal_2019sept.txt")
 Jansen <- Jansen %>% filter(EAF >0.01 & EAF<0.99)
-Jansen <- Jansen %>% select(SNP, A1, A2, EAF, BETA, SE, Pp, Neff)
+Jansen <- Jansen %>% select(SNP, A1, A2, EAF, BETA, SE, P, Neff)
 write.table(Jansen, "Jansen.ma", col.names = F, row.names = F, quote=F)
 ```
 ## Kunkle
 ```{r eval=FALSE}
 # Kunkle
-Kunkle <- vroom("C:/Users/bapti/OneDrive/Documents/Travail/Stage/Code/Kunkle_p-value.ma")
+Kunkle <- vroom("Kunkle_p-value.ma")
 Kunkle <- Kunkle %>% select(MarkerName, Effect_allele, Non_Effect_allele, Beta, SE, Pvalue)
 # Neff is missing for the Kunkle as well as the MAF. We get the MAF from the Jansen and we use Neff given in the article
 write.table(Kunkle, "Kunkle.ma", col.names = F, row.names = F, quote=F)
