@@ -11,7 +11,9 @@ output:
 
 # Getting started
 
-You will be able to find on this site the code as well as the comments relating to this code which are associated with the article : **PREDICTING ALZHEIMER'S CONVERSION USING GENETIC AND GREY-MATTER RISK SCORES**
+You will be able to find on this site the code as well as the comments relating to this code which are associated with the article : 
+
+**PREDICTING ALZHEIMER'S CONVERSION USING GENETIC AND GREY-MATTER RISK SCORES**
 
 # Abstract
 
